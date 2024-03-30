@@ -44,8 +44,8 @@ If you use the serial MH-Z19 sensor:
     * [Sensirion SCD4x library](https://github.com/Sensirion/arduino-i2c-scd4x) and its dependency [Sensirion Arduino Core Library](https://github.com/Sensirion/arduino-core), if you use this sensor
     * Jonathan Dempsey's [MH-Z19 library](https://github.com/WifWaf/MH-Z19), if you use this sensor
     * [Adafruit Neopixel library](https://github.com/adafruit/Adafruit_NeoPixel) to drive the (built-in) 3 colour LED
-    * [Arduino MQTT client library](https://github.com/knolleary/PubSubClient) and [NTP library](https://github.com/sstaub/NTP) if you want to send data to MQTT
+    * [Arduino MQTT client library](https://github.com/knolleary/PubSubClient) if you want to send data to MQTT
 * Select the features you want to use at the top of the main source file under feature selection.
-* If you use MQTT, fill in your WiFi and MQTT data in `mqtt-settings.h`.
+* If you use MQTT, fill in your WiFi, NTP (including time zone) and MQTT data in `mqtt-settings.h`.
 * Select the board ESP32 C3 Dev Module in Arduino
 * Compile and flash.

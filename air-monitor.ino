@@ -11,16 +11,17 @@
  * - https://github.com/adafruit/Adafruit_NeoPixel
  * For MQTT:
  * - https://github.com/knolleary/PubSubClient
- * - https://github.com/sstaub/NTP
+ *
+ * If sketch does not fit, select partition scheme "Minimal SPIFFS" or similar.
  */
 
 /* Feature selection */
 #define SERIAL_OUTPUT
 //#define HAS_SCD30
-//#define HAS_SCD4X
+#define HAS_SCD4X
 #define HAS_MHZ19
 #define HAS_NEOPIXEL
-//#define USE_MQTT
+#define USE_MQTT
 #define USE_BLE
 
 /* Pins (GPIOs) for ESP32-C3-DevKitM-1 */
@@ -48,7 +49,7 @@
 #ifdef USE_MQTT
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <NTP.h>
+#include <ctime>
 #include "mqtt-settings.h"
 #endif
 #ifdef USE_BLE
@@ -59,7 +60,16 @@
 #endif
 #include <limits.h>
 
-/* Constants */
+/* Typedefs */
+struct measurement_t
+{
+  time_t time = 0;
+  uint16_t co2 = 0;
+  float temperature = NAN;
+  float humidity = NAN;
+};
+
+/* Macros */
 #ifdef SERIAL_OUTPUT
 #define SERIAL_PRINT(x) Serial.print(x)
 #define SERIAL_PRINTLN(x) Serial.println(x)
@@ -69,12 +79,17 @@
 #define SERIAL_PRINTLN(x)
 #define SERIAL_PRINT_HEX(x)
 #endif
+
+/* Constants */
 #ifdef HAS_MHZ19
 #define MHZ19_BAUDRATE 9600
 #endif
 #ifdef HAS_NEOPIXEL
 #define NEOPIXEL_PIN PIN_RGB_LED
 #define NEOPIXEL_NUM 1
+#endif
+#ifdef USE_MQTT
+#define TIME_BUF_LEN 30
 #endif
 #ifdef USE_BLE
 #define BLE_NAME "ESP32 Air Monitor"
@@ -86,7 +101,7 @@
 #endif
 
 /* Global variables */
-static uint16_t loop_counter;
+static uint16_t loop_counter = 0;
 #ifdef HAS_SCD30
 SensirionI2cScd30 scd30;
 #endif
@@ -99,8 +114,8 @@ static char error_message[ERRMSGLEN];
 static int16_t error;
 #endif
 #ifdef HAS_MHZ19
-MHZ19 mhz19;
 HardwareSerial serial_port(MHZ19_SERIAL_PORT);
+MHZ19 mhz19;
 #endif
 #ifdef HAS_NEOPIXEL
 Adafruit_NeoPixel neopixels(NEOPIXEL_NUM, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -110,7 +125,6 @@ Colormap colormap(600.0, 1200.0);
 WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 WiFiUDP wifiudp;
-NTP ntp(wifiudp);
 static unsigned long time_last_pub = 0;
 #define MSG_BUFFER_SIZE	(200)
 char mqtt_topic[MSG_BUFFER_SIZE];
@@ -197,6 +211,20 @@ void reconnect() {
     }
   }
 }
+
+void publishData(const char* name, const measurement_t data)
+{
+  struct tm timeinfo;
+  localtime_r(&data.time, &timeinfo);
+  char time_buf[TIME_BUF_LEN];
+  strftime(time_buf, TIME_BUF_LEN, "%d.%m.%Y %H:%M:%S", &timeinfo);
+  snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s/%s", mqtt_topic_prefix, mqtt_topic_measurement, name);
+  if (isnan(data.humidity))
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %d, \"temperature\": %.0f}", time_buf, data.co2, data.temperature);
+  else
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %d, \"temperature\": %.1f, \"humidity\": %.1f}", time_buf, data.co2, data.temperature, data.humidity);
+  mqtt_client.publish(mqtt_topic, mqtt_msg);
+}
 #endif
 
 /** Setup function */
@@ -258,10 +286,7 @@ void setup()
 
 #ifdef USE_MQTT
   setupWifi();
-  ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
-  ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
-  ntp.begin();
-  SERIAL_PRINTLN("Start NTP");
+  configTzTime(time_zone, ntp_server);
   mqtt_client.setServer(mqtt_server, 1883);
   mqtt_client.setCallback(callback);
 #endif
@@ -311,11 +336,11 @@ void loop()
   SERIAL_PRINT("Loop ");
   SERIAL_PRINTLN(loop_counter);
 
-  float co2_concentration = NAN;
-  float temperature = NAN;
-  float humidity = NAN;
 #ifdef HAS_SCD30
-  error = scd30.blockingReadMeasurementData(co2_concentration, temperature, humidity);
+  measurement_t scd30_data;
+  scd30_data.time = time(nullptr);
+  float scd30_co2 = NAN;
+  error = scd30.blockingReadMeasurementData(scd30_co2, scd30_data.temperature, scd30_data.humidity);
   if (error != NO_ERROR) {
     SERIAL_PRINT("Error trying to execute blockingReadMeasurementData(): ");
     errorToString(error, error_message, sizeof error_message);
@@ -323,16 +348,18 @@ void loop()
   }
   else
   {
+    scd30_data.co2 = static_cast<uint16_t>(scd30_co2);
     SERIAL_PRINT("co2Concentration: ");
-    SERIAL_PRINT(co2_concentration);
+    SERIAL_PRINT(scd30_co2);
     SERIAL_PRINT("ppm\ttemperature: ");
-    SERIAL_PRINT(temperature);
+    SERIAL_PRINT(scd30_data.temperature);
     SERIAL_PRINT("°C\thumidity: ");
-    SERIAL_PRINT(humidity);
+    SERIAL_PRINT(scd30_data.humidity);
     SERIAL_PRINTLN("%");
   }
 #endif
 #ifdef HAS_SCD4X
+  measurement_t scd4x_data;
   bool is_data_ready = false;
   while (!is_data_ready)
   {
@@ -348,64 +375,82 @@ void loop()
   }
   if (is_data_ready)
   {
-    uint16_t co2 = 0;
-    error = scd4x.readMeasurement(co2, temperature, humidity);
+    scd4x_data.time = time(nullptr);
+    error = scd4x.readMeasurement(scd4x_data.co2, scd4x_data.temperature, scd4x_data.humidity);
     if (error)
     {
       SERIAL_PRINT("Error trying to execute readMeasurement(): ");
       errorToString(error, error_message, 256);
       SERIAL_PRINTLN(error_message);
     }
-    else if (co2 == 0)
+    else if (scd4x_data.co2 == 0)
     {
       SERIAL_PRINTLN("Invalid sample detected, skipping.");
     }
     else
     {
-      co2_concentration = static_cast<float>(co2);
       SERIAL_PRINT("CO2: ");
-      SERIAL_PRINT(co2);
+      SERIAL_PRINT(scd4x_data.co2);
       SERIAL_PRINT("ppm\tTemperature: ");
-      SERIAL_PRINT(temperature);
+      SERIAL_PRINT(scd4x_data.temperature);
       SERIAL_PRINT("°C\tHumidity: ");
-      SERIAL_PRINT(humidity);
+      SERIAL_PRINT(scd4x_data.humidity);
       SERIAL_PRINTLN("%");
     }
   }
 #endif
 #ifdef HAS_MHZ19
-  int co2 = mhz19.getCO2();
-  co2_concentration = static_cast<float>(co2);
+  measurement_t mhz19_data;
+  mhz19_data.time = time(nullptr);
+  int mhz19_co2 = mhz19.getCO2();
   int8_t temp = mhz19.getTemperature();
-  temperature = static_cast<float>(temp);
   SERIAL_PRINT("CO2: ");
-  SERIAL_PRINT(co2);
+  SERIAL_PRINT(mhz19_co2);
   SERIAL_PRINT("ppm\t");
   SERIAL_PRINT("Temperature: ");
   SERIAL_PRINT(temp);
   SERIAL_PRINTLN("°C");
+  mhz19_data.co2 = static_cast<uint16_t>(mhz19_co2);
+  mhz19_data.temperature = static_cast<float>(temp);
+  mhz19_data.humidity = NAN;
 #endif
-#if !defined(HAS_SCD30) && !defined(HAS_SCD4X) && !defined(HAS_MHZ19)
-  co2_concentration = 400.0 + static_cast<float>(loop_counter); // test value
+  uint16_t co2_concentration = 0;
+  float temperature = NAN;
+  float humidity = NAN;
+#if defined(HAS_SCD30)
+  co2_concentration = scd30_data.co2;
+  temperature = scd30_data.temperature;
+  humidity = scd30_data.humidity;
+#elif defined(HAS_SCD4X)
+  co2_concentration = scd4x_data.co2;
+  temperature = scd4x_data.temperature;
+  humidity = scd4x_data.humidity;
+#elif defined(HAS_MHZ19)
+  co2_concentration = mhz19_data.co2;
+  temperature = mhz19_data.temperature;
+#else
+  co2_concentration = 400 + static_cast<uint16_t>(loop_counter); // test value
 #endif
 
 #ifdef USE_MQTT
   if (!mqtt_client.connected())
     reconnect();
-  if (mqtt_client.connected()) {
+  if (mqtt_client.connected())
     mqtt_client.loop();
-  }
+
   long cur_time = millis();
-  if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!isnan(co2_concentration)) ) {
+  if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!(co2_concentration == 0)) )
+  {
     time_last_pub = cur_time;
-    ntp.update();
-    snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s", mqtt_topic_prefix, mqtt_topic_measurement);
-#ifdef HAS_MHZ19
-    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.0f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature);
-#else
-    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.1f, \"humidity\": %.1f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature, humidity);
+#ifdef HAS_SCD30
+    publishData("scd30", scd30_data);
 #endif
-    mqtt_client.publish(mqtt_topic, mqtt_msg);
+#ifdef HAS_SCD4X
+    publishData("scd4x", scd4x_data);
+#endif
+#ifdef HAS_MHZ19
+    publishData("mh-z19", mhz19_data);
+#endif
   }
 #endif
 
@@ -424,10 +469,9 @@ void loop()
 #endif
 
 #ifdef USE_BLE
-  uint16_t i_co2 = static_cast<uint16_t>(co2_concentration);
-  co2_characteristic->setValue(i_co2);
+  co2_characteristic->setValue(co2_concentration);
   co2_characteristic->notify();
-  uint16_t i_temperature = static_cast<int16_t>(static_cast<int16_t>(temperature*100.0));
+  uint16_t i_temperature = static_cast<int16_t>(temperature*100.0);
   if (isnan(temperature))
     i_temperature = 0x8000; // value not known
   temperature_characteristic->setValue(i_temperature);
