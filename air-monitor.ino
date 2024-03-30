@@ -1,12 +1,11 @@
 /**
  * Air quality monitor with ESP32
  *
- * Uses Sensirion SCD30 sensor with the manufactorer's library
- * for CO2 measurement.
+ * Use one of these supported CO2 sensors: 
+ * - Sensirion SCD30: https://github.com/Sensirion/arduino-i2c-scd30
+ * - Sensirion SCD4x: https://github.com/Sensirion/arduino-i2c-scd4x
  *
- * Libraries:
- * - https://github.com/Sensirion/arduino-i2c-scd30.git
- * - https://github.com/Sensirion/arduino-core.git
+ * Further libraries:
  * For Neopixel:
  * - https://github.com/adafruit/Adafruit_NeoPixel
  * For MQTT:
@@ -15,21 +14,25 @@
  */
 
 /* Feature selection */
-#define HAS_SCD30
+//#define HAS_SCD30
+#define HAS_SCD4X
 #define HAS_NEOPIXEL
 //#define USE_MQTT
 #define USE_BLE
 
 /* Pins (GPIOs) for ESP32-C3-DevKitM-1 */
-#define PIN_SCL 3 // yellow cable of SCD30
-#define PIN_SDA 2 // white cable of SCD30
+#define PIN_SCL 3 // yellow cable of SCDxx
+#define PIN_SDA 2 // white cable of SCDxx
 #define PIN_RGB_LED 8 // built-in rgb LED
 
 /* Includes */
 #include <Arduino.h>
+#include <Wire.h>
 #ifdef HAS_SCD30
 #include <SensirionI2cScd30.h>
-#include <Wire.h>
+#endif
+#ifdef HAS_SCD4X
+#include <SensirionI2CScd4x.h>
 #endif
 #ifdef HAS_NEOPIXEL
 #include <Adafruit_NeoPixel.h>
@@ -67,7 +70,13 @@
 static uint16_t loop_counter;
 #ifdef HAS_SCD30
 SensirionI2cScd30 co2_sensor;
-static char error_message[128];
+#endif
+#ifdef HAS_SCD4X
+SensirionI2CScd4x co2_sensor;
+#endif
+#if defined(HAS_SCD30) || defined(HAS_SCD4X)
+#define ERRMSGLEN 256
+static char error_message[ERRMSGLEN];
 static int16_t error;
 #endif
 #ifdef HAS_NEOPIXEL
@@ -91,6 +100,25 @@ BLECharacteristic* humidity_characteristic = nullptr;
 #endif
 
 /* Function definitions */
+#ifdef HAS_SCD4X
+void printUint16Hex(uint16_t value)
+{
+  Serial.print(value < 4096 ? "0" : "");
+  Serial.print(value < 256 ? "0" : "");
+  Serial.print(value < 16 ? "0" : "");
+  Serial.print(value, HEX);
+}
+
+void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2)
+{
+  Serial.print("Serial: 0x");
+  printUint16Hex(serial0);
+  printUint16Hex(serial1);
+  printUint16Hex(serial2);
+  Serial.println();
+}
+#endif
+
 #ifdef USE_MQTT
 void setupWifi() {
   delay(10);
@@ -151,28 +179,65 @@ void reconnect() {
 /** Setup function */
 void setup()
 {
-    // Set up serial connection.
-    Serial.begin(115200);
+  // Set up serial connection.
+  Serial.begin(115200);
+  while (!Serial) {
+    delay(100);
+  }
 
+  Wire.begin(PIN_SDA, PIN_SCL);
 #ifdef HAS_SCD30
-    // Set up Sensirion SCD30 CO2 sensor.
-    Wire.begin(PIN_SDA, PIN_SCL);
-    co2_sensor.begin(Wire, SCD30_I2C_ADDR_61);
+  // Set up Sensirion SCD30 CO2 sensor.
+  co2_sensor.begin(Wire, SCD30_I2C_ADDR_61);
+#endif
+#ifdef HAS_SCD4X
+  co2_sensor.begin(Wire);
+
+  error = co2_sensor.stopPeriodicMeasurement();
+  if (error)
+  {
+    Serial.print("Error trying to execute stopPeriodicMeasurement(): ");
+    errorToString(error, error_message, sizeof error_message);
+    Serial.println(error_message);
+  }
+
+  uint16_t serial0;
+  uint16_t serial1;
+  uint16_t serial2;
+  error = co2_sensor.getSerialNumber(serial0, serial1, serial2);
+  if (error)
+  {
+    Serial.print("Error trying to execute getSerialNumber(): ");
+    errorToString(error, error_message, sizeof error_message);
+    Serial.println(error_message);
+  }
+  else
+  {
+    printSerialNumber(serial0, serial1, serial2);
+  }
+
+  error = co2_sensor.startPeriodicMeasurement();
+  if (error)
+  {
+    Serial.print("Error trying to execute startPeriodicMeasurement(): ");
+    errorToString(error, error_message, sizeof error_message);
+    Serial.println(error_message);
+  }
 #endif
 
 #ifdef HAS_NEOPIXEL
-    // Setup Neopixel.
-    neopixels.begin();
+  // Setup Neopixel.
+  neopixels.begin();
 #endif
 
 #ifdef USE_MQTT
-    setupWifi();
-    ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
-    ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
-    ntp.begin();
-    Serial.println("Start NTP");
-    mqtt_client.setServer(mqtt_server, 1883);
-    mqtt_client.setCallback(callback);
+  setupWifi();
+  ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
+  ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
+  ntp.begin();
+  Serial.println("Start NTP");
+  mqtt_client.setServer(mqtt_server, 1883);
+  mqtt_client.setCallback(callback);
 #endif
 
 #ifdef USE_BLE
@@ -216,65 +281,106 @@ void setup()
 /** Loop function */
 void loop()
 {
-    loop_counter++;
-    Serial.print("Loop ");
-    Serial.println(loop_counter);
+  loop_counter++;
+  Serial.print("Loop ");
+  Serial.println(loop_counter);
 
-    float co2_concentration = NAN;
-    float temperature = NAN;
-    float humidity = NAN;
-#ifdef HAS_SCD30
-    /* Take a CO2 measurement */
-    error = co2_sensor.blockingReadMeasurementData(co2_concentration, temperature, humidity);
-    if (error != NO_ERROR) {
-        Serial.print("Error trying to execute blockingReadMeasurementData(): ");
-        errorToString(error, error_message, sizeof error_message);
-        Serial.println(error_message);
+  float co2_concentration = NAN;
+  float temperature = NAN;
+  float humidity = NAN;
+#if defined(HAS_SCD30)
+  /* Take a CO2 measurement */
+  error = co2_sensor.blockingReadMeasurementData(co2_concentration, temperature, humidity);
+  if (error != NO_ERROR) {
+    Serial.print("Error trying to execute blockingReadMeasurementData(): ");
+    errorToString(error, error_message, sizeof error_message);
+    Serial.println(error_message);
+  }
+  else
+  {
+    Serial.print("co2Concentration: ");
+    Serial.print(co2_concentration);
+    Serial.print("\t");
+    Serial.print("temperature: ");
+    Serial.print(temperature);
+    Serial.print("\t");
+    Serial.print("humidity: ");
+    Serial.print(humidity);
+    Serial.println();
+  }
+#elif defined(HAS_SCD4X)
+  bool is_data_ready = false;
+  while (!is_data_ready)
+  {
+    delay(100);
+    error = co2_sensor.getDataReadyFlag(is_data_ready);
+    if (error)
+    {
+      Serial.print("Error trying to execute getDataReadyFlag(): ");
+      errorToString(error, error_message, sizeof error_message);
+      Serial.println(error_message);
+      return;
+    }
+  }
+  if (is_data_ready)
+  {
+    uint16_t co2 = 0;
+    error = co2_sensor.readMeasurement(co2, temperature, humidity);
+    if (error)
+    {
+      Serial.print("Error trying to execute readMeasurement(): ");
+      errorToString(error, error_message, 256);
+      Serial.println(error_message);
+    }
+    else if (co2 == 0)
+    {
+      Serial.println("Invalid sample detected, skipping.");
     }
     else
     {
-        Serial.print("co2Concentration: ");
-        Serial.print(co2_concentration);
-        Serial.print("\t");
-        Serial.print("temperature: ");
-        Serial.print(temperature);
-        Serial.print("\t");
-        Serial.print("humidity: ");
-        Serial.print(humidity);
-        Serial.println();
+      co2_concentration = static_cast<float>(co2);
+      Serial.print("CO2: ");
+      Serial.print(co2);
+      Serial.print("\t");
+      Serial.print("Temperature: ");
+      Serial.print(temperature);
+      Serial.print("\t");
+      Serial.print("Humidity: ");
+      Serial.println(humidity);
     }
+  }
 #else
-    co2_concentration = 400.0 + static_cast<double>(loop_counter); // test value
+  co2_concentration = 400.0 + static_cast<double>(loop_counter); // test value
 #endif
 
 #ifdef USE_MQTT
-    if (!mqtt_client.connected())
-        reconnect();
-    if (mqtt_client.connected()) {
-        mqtt_client.loop();
-    }
-    long cur_time = millis();
-    if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!isnan(co2_concentration)) ) {
-        time_last_pub = cur_time;
-        ntp.update();
-        snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s", mqtt_topic_prefix, mqtt_topic_measurement);
-        snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.1f, \"humidity\": %.1f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature, humidity);
-        mqtt_client.publish(mqtt_topic, mqtt_msg);
-    }
+  if (!mqtt_client.connected())
+    reconnect();
+  if (mqtt_client.connected()) {
+    mqtt_client.loop();
+  }
+  long cur_time = millis();
+  if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!isnan(co2_concentration)) ) {
+    time_last_pub = cur_time;
+    ntp.update();
+    snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s", mqtt_topic_prefix, mqtt_topic_measurement);
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.1f, \"humidity\": %.1f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature, humidity);
+    mqtt_client.publish(mqtt_topic, mqtt_msg);
+  }
 #endif
 
 #ifdef HAS_NEOPIXEL
-    rgb_t color = colormap.color(co2_concentration);
-    Serial.print("Value ");
-    Serial.print(co2_concentration);
-    Serial.print(" -> ");
-    Serial.print(color.red);
-    Serial.print(", ");
-    Serial.print(color.green);
-    Serial.print(", ");
-    Serial.println(color.blue);
-    neopixels.setPixelColor(0, neopixels.Color(color.red, color.green, color.blue));
-    neopixels.show();
+  rgb_t color = colormap.color(co2_concentration);
+  Serial.print("Value ");
+  Serial.print(co2_concentration);
+  Serial.print(" -> ");
+  Serial.print(color.red);
+  Serial.print(", ");
+  Serial.print(color.green);
+  Serial.print(", ");
+  Serial.println(color.blue);
+  neopixels.setPixelColor(0, neopixels.Color(color.red, color.green, color.blue));
+  neopixels.show();
 #endif
 
 #ifdef USE_BLE
@@ -293,6 +399,6 @@ void loop()
   humidity_characteristic->notify();
 #endif
 
-    // wait
-    delay(100);
+  // wait
+  delay(100);
 }
