@@ -4,6 +4,7 @@
  * Use one of these supported CO2 sensors: 
  * - Sensirion SCD30: https://github.com/Sensirion/arduino-i2c-scd30
  * - Sensirion SCD4x: https://github.com/Sensirion/arduino-i2c-scd4x
+ * - MH-Z19: https://github.com/WifWaf/MH-Z19
  *
  * Further libraries:
  * For Neopixel:
@@ -14,8 +15,10 @@
  */
 
 /* Feature selection */
+#define SERIAL_OUTPUT
 //#define HAS_SCD30
-#define HAS_SCD4X
+//#define HAS_SCD4X
+#define HAS_MHZ19
 #define HAS_NEOPIXEL
 //#define USE_MQTT
 #define USE_BLE
@@ -24,6 +27,7 @@
 #define PIN_SCL 3 // yellow cable of SCDxx
 #define PIN_SDA 2 // white cable of SCDxx
 #define PIN_RGB_LED 8 // built-in rgb LED
+#define MHZ19_SERIAL_PORT 0 // serial port to use for MH-Z19
 
 /* Includes */
 #include <Arduino.h>
@@ -33,6 +37,9 @@
 #endif
 #ifdef HAS_SCD4X
 #include <SensirionI2CScd4x.h>
+#endif
+#ifdef HAS_MHZ19
+#include <MHZ19.h>
 #endif
 #ifdef HAS_NEOPIXEL
 #include <Adafruit_NeoPixel.h>
@@ -53,6 +60,18 @@
 #include <limits.h>
 
 /* Constants */
+#ifdef SERIAL_OUTPUT
+#define SERIAL_PRINT(x) Serial.print(x)
+#define SERIAL_PRINTLN(x) Serial.println(x)
+#define SERIAL_PRINT_HEX(x) Serial.print(x, HEX)
+#else
+#define SERIAL_PRINT(x)
+#define SERIAL_PRINTLN(x)
+#define SERIAL_PRINT_HEX(x)
+#endif
+#ifdef HAS_MHZ19
+#define MHZ19_BAUDRATE 9600
+#endif
 #ifdef HAS_NEOPIXEL
 #define NEOPIXEL_PIN PIN_RGB_LED
 #define NEOPIXEL_NUM 1
@@ -69,15 +88,19 @@
 /* Global variables */
 static uint16_t loop_counter;
 #ifdef HAS_SCD30
-SensirionI2cScd30 co2_sensor;
+SensirionI2cScd30 scd30;
 #endif
 #ifdef HAS_SCD4X
-SensirionI2CScd4x co2_sensor;
+SensirionI2CScd4x scd4x;
 #endif
 #if defined(HAS_SCD30) || defined(HAS_SCD4X)
 #define ERRMSGLEN 256
 static char error_message[ERRMSGLEN];
 static int16_t error;
+#endif
+#ifdef HAS_MHZ19
+MHZ19 mhz19;
+HardwareSerial serial_port(MHZ19_SERIAL_PORT);
 #endif
 #ifdef HAS_NEOPIXEL
 Adafruit_NeoPixel neopixels(NEOPIXEL_NUM, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -103,19 +126,19 @@ BLECharacteristic* humidity_characteristic = nullptr;
 #ifdef HAS_SCD4X
 void printUint16Hex(uint16_t value)
 {
-  Serial.print(value < 4096 ? "0" : "");
-  Serial.print(value < 256 ? "0" : "");
-  Serial.print(value < 16 ? "0" : "");
-  Serial.print(value, HEX);
+  SERIAL_PRINT(value < 4096 ? "0" : "");
+  SERIAL_PRINT(value < 256 ? "0" : "");
+  SERIAL_PRINT(value < 16 ? "0" : "");
+  SERIAL_PRINT_HEX(value);
 }
 
 void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2)
 {
-  Serial.print("Serial: 0x");
+  SERIAL_PRINT("Serial: 0x");
   printUint16Hex(serial0);
   printUint16Hex(serial1);
   printUint16Hex(serial2);
-  Serial.println();
+  SERIAL_PRINTLN();
 }
 #endif
 
@@ -123,52 +146,52 @@ void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2)
 void setupWifi() {
   delay(10);
   // Start by connecting to a WiFi network.
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(wifi_ssid);
+  SERIAL_PRINTLN();
+  SERIAL_PRINT("Connecting to ");
+  SERIAL_PRINTLN(wifi_ssid);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(wifi_ssid, wifi_password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    SERIAL_PRINT(".");
   }
 
   randomSeed(micros());
 
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  SERIAL_PRINTLN();
+  SERIAL_PRINTLN("WiFi connected");
+  SERIAL_PRINTLN("IP address: ");
+  SERIAL_PRINTLN(WiFi.localIP());
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
+  SERIAL_PRINT("Message arrived [");
+  SERIAL_PRINT(topic);
+  SERIAL_PRINT("] ");
   for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
+    SERIAL_PRINT((char)payload[i]);
   }
-  Serial.println();
+  SERIAL_PRINTLN();
 }
 
 void reconnect() {
   // Loop until reconnected
   for (int tries = 0; !mqtt_client.connected() && tries < 5; tries++) {
-    Serial.print("Attempting MQTT connection ...");
+    SERIAL_PRINT("Attempting MQTT connection ...");
     // Create a random client ID.
-    String client_id = "ESP32Client-";
+    String client_id = "ESP32-Air-Monitor-";
     client_id += String(random(0xffff), HEX);
     // Attempt to connect.
     if (mqtt_client.connect(client_id.c_str())) {
-      Serial.println("connected");
+      SERIAL_PRINTLN("connected");
       // Subscribe.
       mqtt_client.subscribe("inTopic");
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqtt_client.state());
-      Serial.println(" try again in 5 seconds");
+      SERIAL_PRINT("failed, rc=");
+      SERIAL_PRINT(mqtt_client.state());
+      SERIAL_PRINTLN(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -179,54 +202,57 @@ void reconnect() {
 /** Setup function */
 void setup()
 {
-  // Set up serial connection.
-  Serial.begin(115200);
+#ifdef SERIAL_OUTPUT
+  Serial.begin(9600);
   while (!Serial) {
     delay(100);
   }
+#endif
 
+#if defined(HAS_SCD30) || defined(HAS_SCD4X)
   Wire.begin(PIN_SDA, PIN_SCL);
+#endif
 #ifdef HAS_SCD30
-  // Set up Sensirion SCD30 CO2 sensor.
-  co2_sensor.begin(Wire, SCD30_I2C_ADDR_61);
+  scd30.begin(Wire, SCD30_I2C_ADDR_61);
 #endif
 #ifdef HAS_SCD4X
-  co2_sensor.begin(Wire);
+  scd4x.begin(Wire);
 
-  error = co2_sensor.stopPeriodicMeasurement();
+  error = scd4x.stopPeriodicMeasurement();
   if (error)
   {
-    Serial.print("Error trying to execute stopPeriodicMeasurement(): ");
+    SERIAL_PRINT("Error trying to execute stopPeriodicMeasurement(): ");
     errorToString(error, error_message, sizeof error_message);
-    Serial.println(error_message);
+    SERIAL_PRINTLN(error_message);
   }
-
-  uint16_t serial0;
-  uint16_t serial1;
-  uint16_t serial2;
-  error = co2_sensor.getSerialNumber(serial0, serial1, serial2);
+  uint16_t serial0, serial1, serial2;
+  error = scd4x.getSerialNumber(serial0, serial1, serial2);
   if (error)
   {
-    Serial.print("Error trying to execute getSerialNumber(): ");
+    SERIAL_PRINT("Error trying to execute getSerialNumber(): ");
     errorToString(error, error_message, sizeof error_message);
-    Serial.println(error_message);
+    SERIAL_PRINTLN(error_message);
   }
   else
   {
     printSerialNumber(serial0, serial1, serial2);
   }
-
-  error = co2_sensor.startPeriodicMeasurement();
+  error = scd4x.startPeriodicMeasurement();
   if (error)
   {
-    Serial.print("Error trying to execute startPeriodicMeasurement(): ");
+    SERIAL_PRINT("Error trying to execute startPeriodicMeasurement(): ");
     errorToString(error, error_message, sizeof error_message);
-    Serial.println(error_message);
+    SERIAL_PRINTLN(error_message);
   }
 #endif
 
+#ifdef HAS_MHZ19
+  serial_port.begin(MHZ19_BAUDRATE);
+  mhz19.begin(serial_port);
+  mhz19.autoCalibration();
+#endif
+
 #ifdef HAS_NEOPIXEL
-  // Setup Neopixel.
   neopixels.begin();
 #endif
 
@@ -235,13 +261,13 @@ void setup()
   ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
   ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
   ntp.begin();
-  Serial.println("Start NTP");
+  SERIAL_PRINTLN("Start NTP");
   mqtt_client.setServer(mqtt_server, 1883);
   mqtt_client.setCallback(callback);
 #endif
 
 #ifdef USE_BLE
-  Serial.println("Starting BLE ...");
+  SERIAL_PRINTLN("Starting BLE ...");
   BLEDevice::init(BLE_NAME);
   BLEServer* server = BLEDevice::createServer();
   BLEService* service = server->createService(BLE_SERVICE_UUID);
@@ -274,7 +300,7 @@ void setup()
   advertising->addServiceUUID(BLE_SERVICE_UUID);
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
-  Serial.println("BLE characteristic defined! Now you can read it in your phone!");
+  SERIAL_PRINTLN("BLE characteristic defined! Now you can read it in your phone!");
 #endif
 }
 
@@ -282,75 +308,85 @@ void setup()
 void loop()
 {
   loop_counter++;
-  Serial.print("Loop ");
-  Serial.println(loop_counter);
+  SERIAL_PRINT("Loop ");
+  SERIAL_PRINTLN(loop_counter);
 
   float co2_concentration = NAN;
   float temperature = NAN;
   float humidity = NAN;
-#if defined(HAS_SCD30)
-  /* Take a CO2 measurement */
-  error = co2_sensor.blockingReadMeasurementData(co2_concentration, temperature, humidity);
+#ifdef HAS_SCD30
+  error = scd30.blockingReadMeasurementData(co2_concentration, temperature, humidity);
   if (error != NO_ERROR) {
-    Serial.print("Error trying to execute blockingReadMeasurementData(): ");
+    SERIAL_PRINT("Error trying to execute blockingReadMeasurementData(): ");
     errorToString(error, error_message, sizeof error_message);
-    Serial.println(error_message);
+    SERIAL_PRINTLN(error_message);
   }
   else
   {
-    Serial.print("co2Concentration: ");
-    Serial.print(co2_concentration);
-    Serial.print("\t");
-    Serial.print("temperature: ");
-    Serial.print(temperature);
-    Serial.print("\t");
-    Serial.print("humidity: ");
-    Serial.print(humidity);
-    Serial.println();
+    SERIAL_PRINT("co2Concentration: ");
+    SERIAL_PRINT(co2_concentration);
+    SERIAL_PRINT("ppm\ttemperature: ");
+    SERIAL_PRINT(temperature);
+    SERIAL_PRINT("°C\thumidity: ");
+    SERIAL_PRINT(humidity);
+    SERIAL_PRINTLN("%");
   }
-#elif defined(HAS_SCD4X)
+#endif
+#ifdef HAS_SCD4X
   bool is_data_ready = false;
   while (!is_data_ready)
   {
     delay(100);
-    error = co2_sensor.getDataReadyFlag(is_data_ready);
+    error = scd4x.getDataReadyFlag(is_data_ready);
     if (error)
     {
-      Serial.print("Error trying to execute getDataReadyFlag(): ");
+      SERIAL_PRINT("Error trying to execute getDataReadyFlag(): ");
       errorToString(error, error_message, sizeof error_message);
-      Serial.println(error_message);
+      SERIAL_PRINTLN(error_message);
       return;
     }
   }
   if (is_data_ready)
   {
     uint16_t co2 = 0;
-    error = co2_sensor.readMeasurement(co2, temperature, humidity);
+    error = scd4x.readMeasurement(co2, temperature, humidity);
     if (error)
     {
-      Serial.print("Error trying to execute readMeasurement(): ");
+      SERIAL_PRINT("Error trying to execute readMeasurement(): ");
       errorToString(error, error_message, 256);
-      Serial.println(error_message);
+      SERIAL_PRINTLN(error_message);
     }
     else if (co2 == 0)
     {
-      Serial.println("Invalid sample detected, skipping.");
+      SERIAL_PRINTLN("Invalid sample detected, skipping.");
     }
     else
     {
       co2_concentration = static_cast<float>(co2);
-      Serial.print("CO2: ");
-      Serial.print(co2);
-      Serial.print("\t");
-      Serial.print("Temperature: ");
-      Serial.print(temperature);
-      Serial.print("\t");
-      Serial.print("Humidity: ");
-      Serial.println(humidity);
+      SERIAL_PRINT("CO2: ");
+      SERIAL_PRINT(co2);
+      SERIAL_PRINT("ppm\tTemperature: ");
+      SERIAL_PRINT(temperature);
+      SERIAL_PRINT("°C\tHumidity: ");
+      SERIAL_PRINT(humidity);
+      SERIAL_PRINTLN("%");
     }
   }
-#else
-  co2_concentration = 400.0 + static_cast<double>(loop_counter); // test value
+#endif
+#ifdef HAS_MHZ19
+  int co2 = mhz19.getCO2();
+  co2_concentration = static_cast<float>(co2);
+  int8_t temp = mhz19.getTemperature();
+  temperature = static_cast<float>(temp);
+  SERIAL_PRINT("CO2: ");
+  SERIAL_PRINT(co2);
+  SERIAL_PRINT("ppm\t");
+  SERIAL_PRINT("Temperature: ");
+  SERIAL_PRINT(temp);
+  SERIAL_PRINTLN("°C");
+#endif
+#if !defined(HAS_SCD30) && !defined(HAS_SCD4X) && !defined(HAS_MHZ19)
+  co2_concentration = 400.0 + static_cast<float>(loop_counter); // test value
 #endif
 
 #ifdef USE_MQTT
@@ -364,21 +400,25 @@ void loop()
     time_last_pub = cur_time;
     ntp.update();
     snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s", mqtt_topic_prefix, mqtt_topic_measurement);
+#ifdef HAS_MHZ19
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.0f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature);
+#else
     snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %.0f, \"temperature\": %.1f, \"humidity\": %.1f}", ntp.formattedTime("%d.%m.%Y %H:%M:%S"), co2_concentration, temperature, humidity);
+#endif
     mqtt_client.publish(mqtt_topic, mqtt_msg);
   }
 #endif
 
 #ifdef HAS_NEOPIXEL
   rgb_t color = colormap.color(co2_concentration);
-  Serial.print("Value ");
-  Serial.print(co2_concentration);
-  Serial.print(" -> ");
-  Serial.print(color.red);
-  Serial.print(", ");
-  Serial.print(color.green);
-  Serial.print(", ");
-  Serial.println(color.blue);
+  SERIAL_PRINT("Value ");
+  SERIAL_PRINT(co2_concentration);
+  SERIAL_PRINT(" -> ");
+  SERIAL_PRINT(color.red);
+  SERIAL_PRINT(", ");
+  SERIAL_PRINT(color.green);
+  SERIAL_PRINT(", ");
+  SERIAL_PRINTLN(color.blue);
   neopixels.setPixelColor(0, neopixels.Color(color.red, color.green, color.blue));
   neopixels.show();
 #endif
@@ -400,5 +440,5 @@ void loop()
 #endif
 
   // wait
-  delay(100);
+  delay(200);
 }
