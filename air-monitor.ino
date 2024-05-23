@@ -19,16 +19,21 @@
 #define SERIAL_OUTPUT
 //#define HAS_SCD30
 #define HAS_SCD4X
-#define HAS_MHZ19
+//#define HAS_MHZ19
 #define HAS_NEOPIXEL
+#define HAS_4DIGIT
+#define HAS_LDR
 #define USE_MQTT
-#define USE_BLE
+//#define USE_BLE
 
 /* Pins (GPIOs) for ESP32-C3-DevKitM-1 */
 #define PIN_SCL 3 // yellow cable of SCDxx
 #define PIN_SDA 2 // white cable of SCDxx
 #define PIN_RGB_LED 8 // built-in rgb LED
 #define MHZ19_SERIAL_PORT 0 // serial port to use for MH-Z19
+#define TM1637_CLK 7
+#define TM1637_DIO 6
+#define ADC_PIN 1
 
 /* Includes */
 #include <Arduino.h>
@@ -45,6 +50,9 @@
 #ifdef HAS_NEOPIXEL
 #include <Adafruit_NeoPixel.h>
 #include "colormap.h"
+#endif
+#ifdef HAS_4DIGIT
+#include <TM1637Display.h>
 #endif
 #ifdef USE_MQTT
 #include <WiFi.h>
@@ -81,12 +89,24 @@ struct measurement_t
 #endif
 
 /* Constants */
+#ifdef SERIAL_OUTPUT
+#define SERIAL_OUTPUT_SPEED 9600
+#endif
 #ifdef HAS_MHZ19
 #define MHZ19_BAUDRATE 9600
 #endif
 #ifdef HAS_NEOPIXEL
 #define NEOPIXEL_PIN PIN_RGB_LED
 #define NEOPIXEL_NUM 1
+#define NEOPIXEL_MAX_BRIGHTNESS_FACTOR 128
+#endif
+#ifdef HAS_4DIGIT
+const uint8_t SEG_HI[] = {
+        0,                                       // _
+        SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,   // H
+        SEG_B | SEG_C,                           // I
+        0                                        // _
+    };
 #endif
 #ifdef USE_MQTT
 #define TIME_BUF_LEN 30
@@ -101,7 +121,9 @@ struct measurement_t
 #endif
 
 /* Global variables */
+#if !defined(HAS_SCD30) && !defined(HAS_SCD4X) && !defined(HAS_MHZ19)
 static uint16_t loop_counter = 0;
+#endif
 #ifdef HAS_SCD30
 SensirionI2cScd30 scd30;
 #endif
@@ -120,6 +142,9 @@ MHZ19 mhz19;
 #ifdef HAS_NEOPIXEL
 Adafruit_NeoPixel neopixels(NEOPIXEL_NUM, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 Colormap colormap(600.0, 1200.0);
+#endif
+#ifdef HAS_4DIGIT
+TM1637Display digits(TM1637_CLK, TM1637_DIO);
 #endif
 #ifdef USE_MQTT
 WiFiClient wifi_client;
@@ -231,7 +256,7 @@ void publishData(const char* name, const measurement_t data)
 void setup()
 {
 #ifdef SERIAL_OUTPUT
-  Serial.begin(9600);
+  Serial.begin(SERIAL_OUTPUT_SPEED);
   while (!Serial) {
     delay(100);
   }
@@ -284,6 +309,10 @@ void setup()
   neopixels.begin();
 #endif
 
+#ifdef HAS_4DIGIT
+digits.setBrightness(0x0f);
+#endif
+
 #ifdef USE_MQTT
   setupWifi();
   configTzTime(time_zone, ntp_server);
@@ -332,9 +361,11 @@ void setup()
 /** Loop function */
 void loop()
 {
+#if !defined(HAS_SCD30) && !defined(HAS_SCD4X) && !defined(HAS_MHZ19)
   loop_counter++;
   SERIAL_PRINT("Loop ");
   SERIAL_PRINTLN(loop_counter);
+#endif
 
 #ifdef HAS_SCD30
   measurement_t scd30_data;
@@ -349,7 +380,7 @@ void loop()
   else
   {
     scd30_data.co2 = static_cast<uint16_t>(scd30_co2);
-    SERIAL_PRINT("co2Concentration: ");
+    SERIAL_PRINT("CO2 concentration: ");
     SERIAL_PRINT(scd30_co2);
     SERIAL_PRINT("ppm\ttemperature: ");
     SERIAL_PRINT(scd30_data.temperature);
@@ -454,6 +485,12 @@ void loop()
   }
 #endif
 
+#ifdef HAS_LDR
+  uint16_t brightness = analogRead(ADC_PIN);
+  SERIAL_PRINT(F("Brightness "));
+  SERIAL_PRINTLN(brightness);
+#endif
+
 #ifdef HAS_NEOPIXEL
   rgb_t color = colormap.color(co2_concentration);
   SERIAL_PRINT("Value ");
@@ -464,8 +501,39 @@ void loop()
   SERIAL_PRINT(color.green);
   SERIAL_PRINT(", ");
   SERIAL_PRINTLN(color.blue);
+#ifdef HAS_LDR
+  uint16_t brightness_factor = (brightness == 0) ? NEOPIXEL_MAX_BRIGHTNESS_FACTOR : 4096 / brightness;
+  if (brightness_factor == 0)
+    brightness_factor = 1;
+  else if (brightness_factor > NEOPIXEL_MAX_BRIGHTNESS_FACTOR)
+    brightness_factor = NEOPIXEL_MAX_BRIGHTNESS_FACTOR;
+  SERIAL_PRINT(F("Brightness factor "));
+  SERIAL_PRINT(brightness_factor);
+  color.red /= static_cast<uint8_t>(brightness_factor);
+  color.green /= static_cast<uint8_t>(brightness_factor);
+  color.blue /= static_cast<uint8_t>(brightness_factor);
+  SERIAL_PRINT(F(" -> "));
+  SERIAL_PRINT(color.red);
+  SERIAL_PRINT(F(", "));
+  SERIAL_PRINT(color.green);
+  SERIAL_PRINT(F(", "));
+  SERIAL_PRINTLN(color.blue);
+#endif
   neopixels.setPixelColor(0, neopixels.Color(color.red, color.green, color.blue));
   neopixels.show();
+#endif
+
+#ifdef HAS_4DIGIT
+  if (co2_concentration >= 10000)
+    digits.setSegments(SEG_HI);
+  else
+    digits.showNumberDec(co2_concentration, false);
+#ifdef HAS_LDR
+  uint8_t digit_brightness = static_cast<uint8_t>(brightness / 256);
+  SERIAL_PRINT(F("4-digit brightness "));
+  SERIAL_PRINTLN(digit_brightness);
+  digits.setBrightness(digit_brightness);
+#endif
 #endif
 
 #ifdef USE_BLE

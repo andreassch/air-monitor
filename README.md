@@ -17,23 +17,17 @@ This is an ESP32 based project to measure air quality in terms of CO2 concentrat
     * [Sensirion SCD30 breakout board](https://wiki.seeedstudio.com/Grove-CO2_Temperature_Humidity_Sensor-SCD30/)
     * [Sensirion SCD41 breakout board](https://wiki.seeedstudio.com/Grove-CO2_&_Temperature_&_Humidity_Sensor-SCD41/)
     * [Winsen MH-Z19](https://www.winsen-sensor.com/product/mh-z19c.html)
+* Optionally, a [Grove 4 digit display](https://wiki.seeedstudio.com/Grove-4-Digit_Display/)
+* Optionally, an LDR PFW551M to measure ambient brightness and therewith control display brightness
 
 
 ## Wiring
 
-If you use a Sensirion I2C sensor:
+The full-blown schematics is as follows:
 
-* SCDxx yellow cable (SCL) to ESP32 GPIO3
-* SCDxx white cable (SDA) to ESP32 GPIO2
-* SCDxx red cable (VCC) to ESP32 3V3
-* SCDxx black cable (GND) to ESP32 GND
+![schematics](schematics.png)
 
-If you use the serial MH-Z19 sensor:
-
-* MH-Z19 Vin to ESP32 5V
-* MH-Z19 GND to ESP32 GND
-* MH-Z19 Rx to ESP32 TX
-* MH-Z19 Tx to ESP32 RX
+As mentioned, several components are optional, e.g. the four-digit display or the brightness sensor. If you use an MH-Z19 CO2 sensor, it is connected via TX and RX and needs to be supplied by 5V.
 
 
 # Software installation
