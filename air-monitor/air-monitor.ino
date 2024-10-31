@@ -232,9 +232,9 @@ void publishData(const char* name, const measurement_t data)
   strftime(time_buf, TIME_BUF_LEN, "%d.%m.%Y %H:%M:%S", &timeinfo);
   snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s/%s", mqtt_topic_prefix, mqtt_topic_measurement, name);
   if (isnan(data.humidity))
-    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %d, \"temperature\": %.0f}", time_buf, data.co2, data.temperature);
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %u, \"temperature\": %.0f}", time_buf, data.co2, data.temperature);
   else
-    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %d, \"temperature\": %.1f, \"humidity\": %.1f}", time_buf, data.co2, data.temperature, data.humidity);
+    snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %u, \"temperature\": %.1f, \"humidity\": %.1f}", time_buf, data.co2, data.temperature, data.humidity);
   mqtt_client.publish(mqtt_topic, mqtt_msg);
 }
 #endif
@@ -454,21 +454,27 @@ void loop()
   if (!mqtt_client.connected())
     reconnect();
   if (mqtt_client.connected())
+  {
     mqtt_client.loop();
 
-  long cur_time = millis();
-  if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!(co2_concentration == 0)) )
-  {
-    time_last_pub = cur_time;
+    long cur_time = millis();
+    if ( ((cur_time - time_last_pub >= MQTT_PUB_INTERVAL) || (cur_time < time_last_pub)) && (!(co2_concentration == 0)) )
+    {
+      time_last_pub = cur_time;
 #ifdef HAS_SCD30
-    publishData("scd30", scd30_data);
+      publishData("scd30", scd30_data);
 #endif
 #ifdef HAS_SCD4X
-    publishData("scd4x", scd4x_data);
+      publishData("scd4x", scd4x_data);
 #endif
 #ifdef HAS_MHZ19
-    publishData("mh-z19", mhz19_data);
+      publishData("mh-z19", mhz19_data);
 #endif
+    }
+  }
+  else
+  {
+    SERIAL_PRINTLN("No MQTT connection!");
   }
 #endif
 
