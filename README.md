@@ -51,7 +51,8 @@ pio run -t upload
     * Jonathan Dempsey's [MH-Z19 library](https://github.com/WifWaf/MH-Z19), if you use this sensor
     * [Adafruit Neopixel library](https://github.com/adafruit/Adafruit_NeoPixel) to drive the (built-in) 3 colour LED
     * [TM1637 (LED Driver) libary](https://github.com/avishorp/TM1637) if you use a 4 digit 7-segment display
-    * [Arduino MQTT client library](https://github.com/knolleary/PubSubClient) if you want to send data to MQTT
+    * [Arduino MQTT client library](https://github.com/knolleary/PubSubClient) if you want to send data to MQTT or receive data from MQTT
+    * [JSON library for Arduino](https://github.com/bblanchon/ArduinoJson) if you want to receive data from MQTT
 * Select the features you want to use and the wiring in `feature_selection.h`.
 * If you use MQTT, fill in your WiFi, NTP (including time zone) and MQTT data in `mqtt-settings.h`.
 * Select the board ESP32 C3 Dev Module in Arduino

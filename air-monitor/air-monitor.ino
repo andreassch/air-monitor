@@ -13,6 +13,7 @@
  * - https://github.com/avishorp/TM1637
  * For MQTT:
  * - https://github.com/knolleary/PubSubClient
+ * - https://github.com/bblanchon/ArduinoJson if reception from MQTT is desired
  *
  * If sketch does not fit, select partition scheme "Minimal SPIFFS" or similar.
  */
@@ -45,7 +46,10 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ctime>
-#include "mqtt-settings.h"
+#include "mqtt_settings.h"
+#ifdef MQTT_TOPIC_RECEIVE
+#include <ArduinoJson.h>
+#endif
 #endif
 #ifdef USE_BLE
 #include <BLEDevice.h>
@@ -141,6 +145,9 @@ static unsigned long time_last_pub = 0;
 #define MSG_BUFFER_SIZE	(200)
 char mqtt_topic[MSG_BUFFER_SIZE];
 char mqtt_msg[MSG_BUFFER_SIZE];
+#ifdef MQTT_TOPIC_RECEIVE
+measurement_t mqtt_data;
+#endif
 #endif
 #ifdef USE_BLE
 BLECharacteristic* co2_characteristic = nullptr;
@@ -169,17 +176,19 @@ void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2)
 #endif
 
 #ifdef USE_MQTT
-void setupWifi() {
+void setupWifi()
+{
   delay(10);
   // Start by connecting to a WiFi network.
   SERIAL_PRINTLN();
   SERIAL_PRINT("Connecting to ");
-  SERIAL_PRINTLN(wifi_ssid);
+  SERIAL_PRINTLN(WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(wifi_ssid, wifi_password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     delay(500);
     SERIAL_PRINT(".");
   }
@@ -192,29 +201,57 @@ void setupWifi() {
   SERIAL_PRINTLN(WiFi.localIP());
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
+void callback(char* topic, byte* payload, unsigned int length)
+{
   SERIAL_PRINT("Message arrived [");
   SERIAL_PRINT(topic);
   SERIAL_PRINT("] ");
-  for (int i = 0; i < length; i++) {
+  for (int i = 0; i < length; i++)
+  {
     SERIAL_PRINT((char)payload[i]);
   }
   SERIAL_PRINTLN();
+
+#ifdef MQTT_TOPIC_RECEIVE
+  if (!strcmp(topic, MQTT_TOPIC_PREFIX "/" MQTT_TOPIC_RECEIVE))
+  {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error)
+    {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+    }
+    else
+    {
+      mqtt_data.time = time(nullptr);
+      mqtt_data.co2 = doc["co2"].as<uint16_t>();
+      mqtt_data.temperature = doc["temperature"].as<float>();
+      mqtt_data.humidity = doc["humidity"].as<float>();
+    }
+  }
+#endif
 }
 
 void reconnect() {
   // Loop until reconnected
-  for (int tries = 0; !mqtt_client.connected() && tries < 5; tries++) {
+  for (int tries = 0; !mqtt_client.connected() && tries < 5; tries++)
+  {
     SERIAL_PRINT("Attempting MQTT connection ...");
     // Create a random client ID.
     String client_id = "ESP32-Air-Monitor-";
     client_id += String(random(0xffff), HEX);
     // Attempt to connect.
-    if (mqtt_client.connect(client_id.c_str())) {
+    if (mqtt_client.connect(client_id.c_str()))
+    {
       SERIAL_PRINTLN("connected");
       // Subscribe.
-      mqtt_client.subscribe("inTopic");
-    } else {
+#ifdef MQTT_TOPIC_RECEIVE
+      mqtt_client.subscribe(MQTT_TOPIC_PREFIX "/" MQTT_TOPIC_RECEIVE);
+#endif
+    }
+    else
+    {
       SERIAL_PRINT("failed, rc=");
       SERIAL_PRINT(mqtt_client.state());
       SERIAL_PRINTLN(" try again in 5 seconds");
@@ -230,7 +267,7 @@ void publishData(const char* name, const measurement_t data)
   localtime_r(&data.time, &timeinfo);
   char time_buf[TIME_BUF_LEN];
   strftime(time_buf, TIME_BUF_LEN, "%d.%m.%Y %H:%M:%S", &timeinfo);
-  snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s/%s", mqtt_topic_prefix, mqtt_topic_measurement, name);
+  snprintf(mqtt_topic, MSG_BUFFER_SIZE, "%s/%s/%s", MQTT_TOPIC_PREFIX, MQTT_TOPIC_MEASUREMENT, name);
   if (isnan(data.humidity))
     snprintf(mqtt_msg, MSG_BUFFER_SIZE, "{\"time\": \"%s\", \"co2\": %u, \"temperature\": %.0f}", time_buf, data.co2, data.temperature);
   else
@@ -302,8 +339,8 @@ digits.setBrightness(0x0f);
 
 #ifdef USE_MQTT
   setupWifi();
-  configTzTime(time_zone, ntp_server);
-  mqtt_client.setServer(mqtt_server, 1883);
+  configTzTime(TIME_ZONE, NTP_SERVER);
+  mqtt_client.setServer(MQTT_SERVER, 1883);
   mqtt_client.setCallback(callback);
 #endif
 
@@ -446,6 +483,10 @@ void loop()
 #elif defined(HAS_MHZ19)
   co2_concentration = mhz19_data.co2;
   temperature = mhz19_data.temperature;
+#elif defined(MQTT_TOPIC_RECEIVE)
+  co2_concentration = mqtt_data.co2;
+  temperature = mqtt_data.temperature;
+  humidity = mqtt_data.humidity;
 #else
   co2_concentration = 400 + static_cast<uint16_t>(loop_counter); // test value
 #endif
