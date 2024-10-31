@@ -1,3 +1,5 @@
+#pragma once
+
 #ifdef USE_MQTT
 #define MQTT_PUB_INTERVAL 60000 // publish time interval in milliseconds
 

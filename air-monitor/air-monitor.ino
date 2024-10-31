@@ -9,31 +9,18 @@
  * Further libraries:
  * For Neopixel:
  * - https://github.com/adafruit/Adafruit_NeoPixel
+ * For 4 digit 7-segment display:
+ * - https://github.com/avishorp/TM1637
  * For MQTT:
  * - https://github.com/knolleary/PubSubClient
  *
  * If sketch does not fit, select partition scheme "Minimal SPIFFS" or similar.
  */
 
-/* Feature selection */
-#define SERIAL_OUTPUT
-//#define HAS_SCD30
-#define HAS_SCD4X
-//#define HAS_MHZ19
-#define HAS_NEOPIXEL
-#define HAS_4DIGIT
-#define HAS_LDR
-#define USE_MQTT
-//#define USE_BLE
-
-/* Pins (GPIOs) for ESP32-C3-DevKitM-1 */
-#define PIN_SCL 3 // yellow cable of SCDxx
-#define PIN_SDA 2 // white cable of SCDxx
-#define PIN_RGB_LED 8 // built-in rgb LED
-#define MHZ19_SERIAL_PORT 0 // serial port to use for MH-Z19
-#define TM1637_CLK 7
-#define TM1637_DIO 6
-#define ADC_PIN 1
+/* Feature selection for Arduino IDE */
+#ifndef PLATFORMIO
+#include "feature_selection.h"
+#endif
 
 /* Includes */
 #include <Arduino.h>

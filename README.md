@@ -32,14 +32,27 @@ As mentioned, several components are optional, e.g. the four-digit display or th
 
 # Software installation
 
+## PlatformIO
+
+* Select the features to use and the wiring in `platformio.ini`.
+* If you use MQTT, fill in your WiFi, NTP (including time zone) and MQTT data in `mqtt-settings.h`.
+* To compile and flash, run the command
+```
+pio run -t upload
+```
+
+
+## Arduino
+
 * Install ESP32 board support in Arduino [as described in Espressif's documentation](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)
 * Install the necessary libraries in Arduino:
     * [Sensirion SCD30 library](https://github.com/Sensirion/arduino-i2c-scd30) and its dependency [Sensirion Arduino Core Library](https://github.com/Sensirion/arduino-core), if you use this sensor
     * [Sensirion SCD4x library](https://github.com/Sensirion/arduino-i2c-scd4x) and its dependency [Sensirion Arduino Core Library](https://github.com/Sensirion/arduino-core), if you use this sensor
     * Jonathan Dempsey's [MH-Z19 library](https://github.com/WifWaf/MH-Z19), if you use this sensor
     * [Adafruit Neopixel library](https://github.com/adafruit/Adafruit_NeoPixel) to drive the (built-in) 3 colour LED
+    * [TM1637 (LED Driver) libary](https://github.com/avishorp/TM1637) if you use a 4 digit 7-segment display
     * [Arduino MQTT client library](https://github.com/knolleary/PubSubClient) if you want to send data to MQTT
-* Select the features you want to use at the top of the main source file under feature selection.
+* Select the features you want to use and the wiring in `feature_selection.h`.
 * If you use MQTT, fill in your WiFi, NTP (including time zone) and MQTT data in `mqtt-settings.h`.
 * Select the board ESP32 C3 Dev Module in Arduino
 * Compile and flash.
