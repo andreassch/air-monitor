@@ -11,6 +11,8 @@
  * - https://github.com/adafruit/Adafruit_NeoPixel
  * For 4 digit 7-segment display:
  * - https://github.com/avishorp/TM1637
+ * For 16x2 LCD:
+ * - https://github.com/sstaub/LCD-I2C-HD44780
  * For MQTT:
  * - https://github.com/knolleary/PubSubClient
  * - https://github.com/bblanchon/ArduinoJson if reception from MQTT is desired
@@ -37,10 +39,15 @@
 #endif
 #ifdef HAS_NEOPIXEL
 #include <Adafruit_NeoPixel.h>
+#endif
+#if defined(HAS_NEOPIXEL) || defined(RGB_BUILTIN)
 #include "colormap.h"
 #endif
 #ifdef HAS_4DIGIT
 #include <TM1637Display.h>
+#endif
+#ifdef HAS_LCD
+#include <LCDi2c.h>
 #endif
 #ifdef USE_MQTT
 #include <WiFi.h>
@@ -89,6 +96,8 @@ struct measurement_t
 #ifdef HAS_NEOPIXEL
 #define NEOPIXEL_PIN PIN_RGB_LED
 #define NEOPIXEL_NUM 1
+#endif
+#if defined(HAS_NEOPIXEL) || defined(RGB_BUILTIN)
 #define NEOPIXEL_MAX_BRIGHTNESS_FACTOR 128
 #endif
 #ifdef HAS_4DIGIT
@@ -98,6 +107,35 @@ const uint8_t SEG_HI[] = {
         SEG_B | SEG_C,                           // I
         0                                        // _
     };
+#endif
+#ifdef HAS_LCD
+#define LCD_I2C_ADDRESS 0x27
+#define LCD_WIDTH 16
+#define LCD_HEIGHT 2
+#define DISPLAY_BUF_LEN 17
+#define LCD_DEGREE_SIGN 0xDF
+#define LCD_USER_PERCENT_SIGN 0
+uint8_t lcd_user_percent_sign[8] = {
+  0b11000,
+  0b11001,
+  0b00010,
+  0b00100,
+  0b01000,
+  0b10011,
+  0b00011,
+};
+#define LCD_PERCENT_SIGN (0x08 + LCD_USER_PERCENT_SIGN)
+#define LCD_USER_SUMMERTIME_SIGN 1
+uint8_t lcd_user_summertime_sign[8] = {
+  0b11111,
+  0b11001,
+  0b10111,
+  0b10001,
+  0b11101,
+  0b10011,
+  0b11111,
+};
+#define LCD_SUMMERTIME_SIGN (0x08 + LCD_USER_SUMMERTIME_SIGN)
 #endif
 #ifdef USE_MQTT
 #define TIME_BUF_LEN 30
@@ -132,10 +170,16 @@ MHZ19 mhz19;
 #endif
 #ifdef HAS_NEOPIXEL
 Adafruit_NeoPixel neopixels(NEOPIXEL_NUM, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+#endif
+#if defined(HAS_NEOPIXEL) || defined(RGB_BUILTIN)
 Colormap colormap(600.0, 1200.0);
 #endif
 #ifdef HAS_4DIGIT
 TM1637Display digits(TM1637_CLK, TM1637_DIO);
+#endif
+#ifdef HAS_LCD
+LCDi2c lcd(LCD_I2C_ADDRESS, Wire);
+time_t last_display_time = 0;
 #endif
 #ifdef USE_MQTT
 WiFiClient wifi_client;
@@ -276,17 +320,58 @@ void publishData(const char* name, const measurement_t data)
 }
 #endif
 
+#ifdef HAS_LCD
+void displayData(measurement_t data)
+{
+  char display_buf[DISPLAY_BUF_LEN];
+  if (isnan(data.humidity))
+    snprintf(display_buf, DISPLAY_BUF_LEN, "%2.1f%cC  %5dppm", data.temperature, LCD_DEGREE_SIGN, data.co2);
+  else
+    snprintf(display_buf, DISPLAY_BUF_LEN, "%2.0f%cC%3.0f%c%5dppm", data.temperature, LCD_DEGREE_SIGN, data.humidity, LCD_PERCENT_SIGN, data.co2);
+  lcd.locate(2, 1);
+  lcd.printf(display_buf);
+}
+
+#if defined(USE_MQTT) // time is only available if WiFi is connected
+void displayTime(time_t cur_time)
+{
+  struct tm timeinfo;
+  localtime_r(&cur_time, &timeinfo);
+  char display_buf[DISPLAY_BUF_LEN];
+  strftime(display_buf, DISPLAY_BUF_LEN, "%H:%M:%S %d.%m.", &timeinfo);
+  lcd.locate(1, 1);
+  lcd.printf(display_buf);
+  if (timeinfo.tm_isdst)
+  {
+    lcd.character(1, 16, LCD_USER_SUMMERTIME_SIGN);
+  }
+}
+
+void updateDisplayTime()
+{
+  time_t cur_time = time(nullptr);
+  if (cur_time != last_display_time)
+  {
+    displayTime(cur_time);
+    last_display_time = cur_time;
+  }
+}
+#endif
+#endif
+
+
 /** Setup function */
 void setup()
 {
 #ifdef SERIAL_OUTPUT
   Serial.begin(SERIAL_OUTPUT_SPEED);
-  while (!Serial) {
+  for (int i = 0; !Serial && i < 50; i++)
+  {
     delay(100);
   }
 #endif
 
-#if defined(HAS_SCD30) || defined(HAS_SCD4X)
+#if defined(HAS_SCD30) || defined(HAS_SCD4X) || defined(HAS_LCD)
   Wire.begin(PIN_SDA, PIN_SCL);
 #endif
 #ifdef HAS_SCD30
@@ -334,7 +419,19 @@ void setup()
 #endif
 
 #ifdef HAS_4DIGIT
-digits.setBrightness(0x0f);
+  digits.setBrightness(0x0f);
+#endif
+
+#ifdef HAS_LCD
+  lcd.begin(LCD_HEIGHT, LCD_WIDTH);
+  lcd.create(LCD_USER_PERCENT_SIGN, lcd_user_percent_sign);
+  lcd.create(LCD_USER_SUMMERTIME_SIGN, lcd_user_summertime_sign);
+  lcd.cls();
+  lcd.display(BACKLIGHT_ON);
+  lcd.locate(1, 3);
+  lcd.printf("Air monitor");
+  lcd.locate(2, 1);
+  lcd.printf("Initializing ...");
 #endif
 
 #ifdef USE_MQTT
@@ -380,6 +477,10 @@ digits.setBrightness(0x0f);
   BLEDevice::startAdvertising();
   SERIAL_PRINTLN("BLE characteristic defined! Now you can read it in your phone!");
 #endif
+
+#ifdef HAS_LCD
+  lcd.cls();
+#endif
 }
 
 /** Loop function */
@@ -389,6 +490,10 @@ void loop()
   loop_counter++;
   SERIAL_PRINT("Loop ");
   SERIAL_PRINTLN(loop_counter);
+#endif
+
+#if defined(HAS_LCD) && defined(USE_MQTT) && !defined(HAS_SCD4X) // time is only available if WiFi is connected, update during SCD4X measurement is handled below
+  updateDisplayTime();
 #endif
 
 #ifdef HAS_SCD30
@@ -418,7 +523,10 @@ void loop()
   bool is_data_ready = false;
   while (!is_data_ready)
   {
-    delay(100);
+#if defined(HAS_LCD) && defined(USE_MQTT) // time is only available if WiFi is connected
+    updateDisplayTime();
+#endif
+    delay(50);
     error = scd4x.getDataReadyFlag(is_data_ready);
     if (error)
     {
@@ -525,7 +633,7 @@ void loop()
   SERIAL_PRINTLN(brightness);
 #endif
 
-#ifdef HAS_NEOPIXEL
+#if defined(HAS_NEOPIXEL) || defined(RGB_BUILTIN)
   rgb_t color = colormap.color(co2_concentration);
   SERIAL_PRINT("Value ");
   SERIAL_PRINT(co2_concentration);
@@ -553,8 +661,12 @@ void loop()
   SERIAL_PRINT(F(", "));
   SERIAL_PRINTLN(color.blue);
 #endif
+#ifdef HAS_NEOPIXEL
   neopixels.setPixelColor(0, neopixels.Color(color.red, color.green, color.blue));
   neopixels.show();
+#elif defined(RGB_BUILTIN)
+  rgbLedWrite(RGB_BUILTIN, color.red, color.green, color.blue);
+#endif
 #endif
 
 #ifdef HAS_4DIGIT
@@ -567,6 +679,20 @@ void loop()
   SERIAL_PRINT(F("4-digit brightness "));
   SERIAL_PRINTLN(digit_brightness);
   digits.setBrightness(digit_brightness);
+#endif
+#endif
+
+#ifdef HAS_LCD
+#ifdef HAS_SCD4X
+  displayData(scd4x_data);
+#elif defined(HAS_SCD30)
+  displayData(scd30_data);
+#elif defined(HAS_MHZ19)
+  displayData(mhz19_data);
+#else
+  snprintf(display_buf, DISPLAY_BUF_LEN, "%4dppm", co2_concentration);
+  lcd.locate(2, 1);
+  lcd.printf(display_buf);
 #endif
 #endif
 
@@ -586,5 +712,5 @@ void loop()
 #endif
 
   // wait
-  delay(200);
+  delay(100);
 }
